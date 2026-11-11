@@ -1,0 +1,24 @@
+[Unit]
+Description=Security Advisor Telegram Bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=security-advisor
+Group=security-advisor
+WorkingDirectory=/opt/security-advisor
+EnvironmentFile=/etc/security-advisor.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/security-advisor/.venv/bin/python -m security_advisor
+Restart=on-failure
+RestartSec=5
+StateDirectory=security-advisor
+StateDirectoryMode=0750
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
