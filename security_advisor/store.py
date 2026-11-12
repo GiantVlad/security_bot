@@ -24,7 +24,8 @@ class Store:
                 chat_id INTEGER PRIMARY KEY,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
-                last_digest_at TEXT
+                last_digest_at TEXT,
+                digest_time TEXT NOT NULL DEFAULT '09:00'
             );
             CREATE TABLE IF NOT EXISTS subscriptions (
                 chat_id INTEGER NOT NULL REFERENCES users(chat_id) ON DELETE CASCADE,
@@ -60,6 +61,10 @@ class Store:
         }
         if "last_digest_at" not in user_columns:
             self.connection.execute("ALTER TABLE users ADD COLUMN last_digest_at TEXT")
+        if "digest_time" not in user_columns:
+            self.connection.execute(
+                "ALTER TABLE users ADD COLUMN digest_time TEXT NOT NULL DEFAULT '09:00'"
+            )
         columns = {
             row["name"] for row in self.connection.execute("PRAGMA table_info(vulnerabilities)")
         }
@@ -114,6 +119,29 @@ class Store:
             "UPDATE users SET last_digest_at=? WHERE chat_id=?", (utc_now(), chat_id)
         )
         self.connection.commit()
+
+    def digest_time(self, chat_id: int) -> str:
+        row = self.connection.execute(
+            "SELECT digest_time FROM users WHERE chat_id=?", (chat_id,)
+        ).fetchone()
+        return row["digest_time"] if row else "09:00"
+
+    def set_digest_time(self, chat_id: int, value: str) -> None:
+        self.register(chat_id)
+        self.connection.execute(
+            "UPDATE users SET digest_time=? WHERE chat_id=?", (value, chat_id)
+        )
+        self.connection.commit()
+
+    def due_digest_chats(self, now: datetime) -> list[int]:
+        today = now.astimezone(timezone.utc).date().isoformat()
+        current_time = now.astimezone(timezone.utc).strftime("%H:%M")
+        rows = self.connection.execute(
+            "SELECT chat_id FROM users WHERE active=1 AND digest_time<=? "
+            "AND substr(COALESCE(last_digest_at, created_at),1,10)<?",
+            (current_time, today),
+        ).fetchall()
+        return [int(row["chat_id"]) for row in rows]
 
     def set_active(self, chat_id: int, active: bool) -> None:
         self.register(chat_id)

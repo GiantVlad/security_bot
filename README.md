@@ -1,6 +1,6 @@
 # Security Advisor Telegram Bot
 
-A Telegram bot that sends a daily digest of newly discovered open-source vulnerabilities from OSV.dev. Users select broad technology groups; the bot maps those groups to OSV package ecosystems. Digests are scheduled for **09:00 UTC**.
+A Telegram bot that sends a daily digest of newly discovered open-source vulnerabilities from OSV.dev. Users select broad technology groups; the bot maps those groups to OSV package ecosystems. Daily digests default to **09:00 UTC**; each user can choose another UTC time.
 
 ## Requirements
 
@@ -83,6 +83,12 @@ sudo systemctl status security-advisor
 sudo journalctl -u security-advisor -f
 ```
 
+The journal reports each OSV sync with the number of unique records in the modified index, records fetched and saved, fetch failures, and records no longer found. At each user's scheduled time it logs how many advisory records were sent to that chat (including zero). Review today's entries with:
+
+```bash
+sudo journalctl -u security-advisor --since today
+```
+
 To restart after deploying an application update:
 
 ```bash
@@ -111,6 +117,7 @@ The process uses Telegram long polling and must remain running. On its first run
 
 - `/start` — register or resume and open the technology selector
 - `/settings` — edit selected technology groups
+- `/time` — view the current notification time and instructions; use `/time 14:15` to set a daily UTC time in 24-hour `HH:MM` format
 - `/digest` — preview matching items discovered in the last seven days
 - `/stop` — pause scheduled digests
 - `/help` — show help

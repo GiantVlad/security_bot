@@ -51,6 +51,8 @@ class OSVClient:
                 newest = max(newest, modified)
 
             saved = 0
+            failed = 0
+            not_found = 0
             seen: set[str] = set()
             for modified, osv_id in candidates:
                 if osv_id in seen:
@@ -59,15 +61,23 @@ class OSVClient:
                 try:
                     item = await client.get(f"{API_ROOT}/{osv_id}")
                     if item.status_code == 404:
+                        not_found += 1
                         continue
                     item.raise_for_status()
                     self.store.save_vulnerability(item.json())
                     saved += 1
                 except (httpx.HTTPError, ValueError) as exc:
+                    failed += 1
                     LOG.warning("Unable to import OSV record %s: %s", osv_id, exc)
                     # Keep the cursor before failed records so they are retried.
                     newest = min(newest, modified)
 
         if newest > cursor:
             self.store.set_meta("osv_cursor", newest.isoformat())
+        unique_candidates = len(seen)
+        LOG.info(
+            "OSV sync complete: %d unique records found in the modified index; "
+            "%d fetched and saved; %d fetch failures; %d not found",
+            unique_candidates, saved, failed, not_found,
+        )
         return saved
