@@ -1,6 +1,6 @@
 # Security Advisor Telegram Bot
 
-A Telegram bot that sends a daily digest of newly discovered open-source vulnerabilities from OSV.dev. Users select broad technology groups; the bot maps those groups to OSV package ecosystems. Daily digests default to **09:00 UTC**; each user can choose another UTC time.
+A Telegram bot that sends a daily digest of newly discovered open-source vulnerabilities from OSV.dev. Users select broad technology groups; the bot maps those groups to OSV package ecosystems. Digests include only advisories with a CVSS v3 or v4 base score of **9.0 or higher**. Advisories without a usable CVSS v3/v4 vector are omitted. Daily digests default to **09:00 UTC**; each user can choose another UTC time.
 
 ## Requirements
 

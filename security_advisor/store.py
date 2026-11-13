@@ -43,6 +43,7 @@ class Store:
                 aliases TEXT NOT NULL,
                 ecosystems TEXT NOT NULL,
                 affected_json TEXT NOT NULL DEFAULT '[]',
+                severity_json TEXT NOT NULL DEFAULT '[]',
                 references_json TEXT NOT NULL,
                 withdrawn TEXT
             );
@@ -72,6 +73,10 @@ class Store:
         if "affected_json" not in columns:
             self.connection.execute(
                 "ALTER TABLE vulnerabilities ADD COLUMN affected_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "severity_json" not in columns:
+            self.connection.execute(
+                "ALTER TABLE vulnerabilities ADD COLUMN severity_json TEXT NOT NULL DEFAULT '[]'"
             )
         if "first_seen_at" not in columns:
             self.connection.execute(
@@ -188,16 +193,18 @@ class Store:
         ]
         self.connection.execute(
             """INSERT INTO vulnerabilities
-            (osv_id,first_seen_at,modified,published,summary,details,aliases,ecosystems,affected_json,references_json,withdrawn)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            (osv_id,first_seen_at,modified,published,summary,details,aliases,ecosystems,affected_json,severity_json,references_json,withdrawn)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(osv_id) DO UPDATE SET modified=excluded.modified, published=excluded.published,
               summary=excluded.summary, details=excluded.details, aliases=excluded.aliases,
               ecosystems=excluded.ecosystems, affected_json=excluded.affected_json,
+              severity_json=excluded.severity_json,
               references_json=excluded.references_json, withdrawn=excluded.withdrawn""",
             (record["id"], utc_now(), record.get("modified", utc_now()), record.get("published"),
              record.get("summary") or record.get("id", "Security advisory"),
              record.get("details") or "", json.dumps(record.get("aliases") or []),
-             json.dumps(ecosystems), json.dumps(affected), json.dumps(refs), record.get("withdrawn")),
+             json.dumps(ecosystems), json.dumps(affected), json.dumps(record.get("severity") or []),
+             json.dumps(refs), record.get("withdrawn")),
         )
         self.connection.commit()
 
@@ -230,7 +237,7 @@ class Store:
 
         cursor = self.connection.execute(
             "SELECT osv_id, first_seen_at, modified, published, summary, aliases, "
-            "ecosystems, affected_json, withdrawn "
+            "ecosystems, affected_json, severity_json, withdrawn "
             "FROM vulnerabilities "
             "WHERE withdrawn IS NULL AND (published IS NULL OR published <= ?) "
             f"{since_clause}"

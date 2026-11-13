@@ -1,1 +1,2 @@
 python-telegram-bot[job-queue]==22.6
+cvss==3.6

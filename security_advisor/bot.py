@@ -7,6 +7,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from html import escape
 
+from cvss import CVSS3, CVSS4
+from cvss.exceptions import CVSSError
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, TelegramError
@@ -76,11 +78,46 @@ def affected_summary(record: dict) -> str:
     return ", ".join(shown) or "Package details unavailable"
 
 
+def critical_cvss_score(record: dict, ecosystems: set[str]) -> float | None:
+    """Return the highest supplied CVSS v3/v4 base score in the critical band."""
+    severity_entries = list(json.loads(record.get("severity_json", "[]")))
+    for affected in json.loads(record.get("affected_json", "[]")):
+        if not isinstance(affected, dict):
+            continue
+        package = affected.get("package")
+        if not isinstance(package, dict):
+            continue
+        if package.get("ecosystem") in ecosystems:
+            severity_entries.extend(affected.get("severity") or [])
+
+    critical_scores: list[float] = []
+    for entry in severity_entries:
+        if not isinstance(entry, dict):
+            continue
+        vector = entry.get("score")
+        try:
+            if entry.get("type") == "CVSS_V3":
+                score = CVSS3(vector).scores()[0]
+            elif entry.get("type") == "CVSS_V4":
+                score = CVSS4(vector).scores()[0]
+            else:
+                continue
+        except (CVSSError, TypeError, ValueError):
+            # Missing or malformed OSV vectors cannot be classified reliably.
+            continue
+        if score >= 9.0:
+            critical_scores.append(score)
+    return max(critical_scores, default=None)
+
+
 def format_digest_item(key: str, item: dict) -> str:
     groups = ", ".join(relevant_groups(item)) or "Open source"
     link = f"https://osv.dev/vulnerability/{escape(item['osv_id'])}"
+    score = item.get("critical_score")
+    severity = f"Critical · CVSS {score:.1f}\n" if score is not None else ""
     return (
         f"<b>{escape(item['summary'])}</b>\n"
+        f"{severity}"
         f"{escape(key)} · {escape(groups)}\n"
         f"Affects: {escape(affected_summary(item))}\n"
         f"<a href=\"{link}\">Details</a>\n\n"
@@ -93,6 +130,10 @@ def digest_items(chat_id: int, since: str | None = None) -> list[tuple[str, dict
     items = store().records_for_groups(ecos, since=since)
     unique: dict[str, dict] = {}
     for item in items:
+        score = critical_cvss_score(item, ecos)
+        if score is None:
+            continue
+        item["critical_score"] = score
         key = canonical_id(item)
         unique.setdefault(key, item)
     return list(unique.items())
@@ -104,12 +145,7 @@ def format_digest(items: list[tuple[str, dict]]) -> list[str]:
     sections: list[str] = []
     current = "🛡 <b>Security digest</b>\n\n"
     for key, item in items:
-        groups = ", ".join(relevant_groups(item)) or "Open source"
-        link = f"https://osv.dev/vulnerability/{escape(item['osv_id'])}"
-        text = (f"<b>{escape(item['summary'])}</b>\n"
-                f"{escape(key)} · {escape(groups)}\n"
-                f"Affects: {escape(affected_summary(item))}\n"
-                f"<a href=\"{link}\">Details</a>\n\n")
+        text = format_digest_item(key, item)
         if len(current) + len(text) > 3800 and current.strip():
             sections.append(current.rstrip())
             current = "🛡 <b>Security digest (continued)</b>\n\n"
@@ -213,6 +249,10 @@ async def send_digest(bot, chat_id: int, since: str | None = None) -> int:
         seen.add(key)
         if store().record_was_delivered(chat_id, item):
             continue
+        score = critical_cvss_score(item, ecosystems)
+        if score is None:
+            continue
+        item["critical_score"] = score
         line = format_digest_item(key, item)
         if len(current) + len(line) > 3800 and current_records:
             await flush()
