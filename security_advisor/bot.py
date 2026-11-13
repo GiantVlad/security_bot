@@ -76,6 +76,17 @@ def affected_summary(record: dict) -> str:
     return ", ".join(shown) or "Package details unavailable"
 
 
+def format_digest_item(key: str, item: dict) -> str:
+    groups = ", ".join(relevant_groups(item)) or "Open source"
+    link = f"https://osv.dev/vulnerability/{escape(item['osv_id'])}"
+    return (
+        f"<b>{escape(item['summary'])}</b>\n"
+        f"{escape(key)} · {escape(groups)}\n"
+        f"Affects: {escape(affected_summary(item))}\n"
+        f"<a href=\"{link}\">Details</a>\n\n"
+    )
+
+
 def digest_items(chat_id: int, since: str | None = None) -> list[tuple[str, dict]]:
     selected = store().selected_groups(chat_id)
     ecos = {e for group in selected for e in GROUPS.get(group, ())}
@@ -175,43 +186,41 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def send_digest(bot, chat_id: int, since: str | None = None) -> int:
     if not store().is_active(chat_id):
         return 0
-    items = digest_items(chat_id, since=since)
-    pending = [
-        (key, item) for key, item in items
-        if not store().record_was_delivered(chat_id, item)
-    ]
-    if not pending:
-        return 0
-
-    chunks: list[tuple[str, list[dict]]] = []
     current = "🛡 <b>Security digest</b>\n\n"
     current_records: list[dict] = []
-    for key, item in pending:
-        groups = ", ".join(relevant_groups(item)) or "Open source"
-        link = f"https://osv.dev/vulnerability/{escape(item['osv_id'])}"
-        line = (
-            f"<b>{escape(item['summary'])}</b>\n"
-            f"{escape(key)} · {escape(groups)}\n"
-            f"Affects: {escape(affected_summary(item))}\n"
-            f"<a href=\"{link}\">Details</a>\n\n"
-        )
-        if len(current) + len(line) > 3800 and current_records:
-            chunks.append((current.rstrip(), current_records))
-            current = "🛡 <b>Security digest (continued)</b>\n\n"
-            current_records = []
-        current += line
-        current_records.append(item)
-    if current_records:
-        chunks.append((current.rstrip(), current_records))
+    pending_count = 0
 
-    for section, records in chunks:
+    async def flush() -> None:
+        nonlocal current, current_records
+        if not current_records:
+            return
         await bot.send_message(
-            chat_id=chat_id, text=section, parse_mode=ParseMode.HTML,
+            chat_id=chat_id, text=current.rstrip(), parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-        for record in records:
+        for record in current_records:
             store().mark_record_delivered(chat_id, record)
-    return len(pending)
+        current = "🛡 <b>Security digest (continued)</b>\n\n"
+        current_records = []
+
+    selected = store().selected_groups(chat_id)
+    ecosystems = {e for group in selected for e in GROUPS.get(group, ())}
+    seen: set[str] = set()
+    for item in store().iter_records_for_groups(ecosystems, since=since):
+        key = canonical_id(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        if store().record_was_delivered(chat_id, item):
+            continue
+        line = format_digest_item(key, item)
+        if len(current) + len(line) > 3800 and current_records:
+            await flush()
+        current += line
+        current_records.append(item)
+        pending_count += 1
+    await flush()
+    return pending_count
 
 
 async def digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

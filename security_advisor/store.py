@@ -1,5 +1,6 @@
 """Small SQLite persistence layer."""
 
+from collections.abc import Iterator
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -200,23 +201,55 @@ class Store:
         )
         self.connection.commit()
 
-    def records_for_groups(self, groups: set[str], since: str | None = None) -> list[dict[str, Any]]:
+    def iter_records_for_groups(
+        self,
+        groups: set[str],
+        since: str | None = None,
+        batch_size: int = 100,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield matching advisories in bounded batches.
+
+        Filtering in SQLite avoids materializing the full vulnerability table,
+        including its large details and references columns, for each digest.
+        ``fetchmany`` keeps Python memory bounded while the cursor streams rows.
+        """
         if not groups:
-            return []
-        rows = self.connection.execute(
-            "SELECT * FROM vulnerabilities WHERE withdrawn IS NULL AND (published IS NULL OR published <= ?) "
-            "ORDER BY first_seen_at DESC", (utc_now(),)
-        ).fetchall()
-        wanted = set(groups)
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            if since and row["first_seen_at"] and row["first_seen_at"] < since:
-                continue
-            ecosystems = set(json.loads(row["ecosystems"]))
-            if not ecosystems.intersection(wanted):
-                continue
-            result.append(dict(row))
-        return result
+            return
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+
+        ecosystem_placeholders = ",".join("?" for _ in groups)
+        since_clause = ""
+        params: list[Any] = [utc_now()]
+        if since:
+            # Preserve the previous behavior for legacy rows without a
+            # first_seen_at value: those rows remain eligible.
+            since_clause = "AND (first_seen_at >= ? OR first_seen_at = '') "
+            params.append(since)
+        params.extend(sorted(groups))
+
+        cursor = self.connection.execute(
+            "SELECT osv_id, first_seen_at, modified, published, summary, aliases, "
+            "ecosystems, affected_json, withdrawn "
+            "FROM vulnerabilities "
+            "WHERE withdrawn IS NULL AND (published IS NULL OR published <= ?) "
+            f"{since_clause}"
+            "AND EXISTS ("
+            "SELECT 1 FROM json_each(vulnerabilities.ecosystems) "
+            f"WHERE value IN ({ecosystem_placeholders})"
+            ")",
+            params,
+        )
+        try:
+            while rows := cursor.fetchmany(batch_size):
+                for row in rows:
+                    yield dict(row)
+        finally:
+            cursor.close()
+
+    def records_for_groups(self, groups: set[str], since: str | None = None) -> list[dict[str, Any]]:
+        """Return matching advisories for callers that need a materialized list."""
+        return list(self.iter_records_for_groups(groups, since=since))
 
     def record_identifiers(self, record: dict[str, Any]) -> set[str]:
         return {record["osv_id"], *json.loads(record["aliases"])}
