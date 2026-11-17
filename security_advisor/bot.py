@@ -78,8 +78,8 @@ def affected_summary(record: dict) -> str:
     return ", ".join(shown) or "Package details unavailable"
 
 
-def critical_cvss_score(record: dict, ecosystems: set[str]) -> float | None:
-    """Return the highest supplied CVSS v3/v4 base score in the critical band."""
+def high_or_critical_cvss_score(record: dict, ecosystems: set[str]) -> float | None:
+    """Return the highest supplied CVSS v3/v4 base score in the high or critical band."""
     severity_entries = list(json.loads(record.get("severity_json", "[]")))
     for affected in json.loads(record.get("affected_json", "[]")):
         if not isinstance(affected, dict):
@@ -90,7 +90,7 @@ def critical_cvss_score(record: dict, ecosystems: set[str]) -> float | None:
         if package.get("ecosystem") in ecosystems:
             severity_entries.extend(affected.get("severity") or [])
 
-    critical_scores: list[float] = []
+    qualifying_scores: list[float] = []
     for entry in severity_entries:
         if not isinstance(entry, dict):
             continue
@@ -105,16 +105,20 @@ def critical_cvss_score(record: dict, ecosystems: set[str]) -> float | None:
         except (CVSSError, TypeError, ValueError):
             # Missing or malformed OSV vectors cannot be classified reliably.
             continue
-        if score >= 9.0:
-            critical_scores.append(score)
-    return max(critical_scores, default=None)
+        if score >= 7.0:
+            qualifying_scores.append(score)
+    return max(qualifying_scores, default=None)
 
 
 def format_digest_item(key: str, item: dict) -> str:
     groups = ", ".join(relevant_groups(item)) or "Open source"
     link = f"https://osv.dev/vulnerability/{escape(item['osv_id'])}"
-    score = item.get("critical_score")
-    severity = f"Critical · CVSS {score:.1f}\n" if score is not None else ""
+    score = item.get("cvss_score")
+    if score is None:
+        severity = ""
+    else:
+        band = "Critical" if score >= 9.0 else "High"
+        severity = f"{band} · CVSS {score:.1f}\n"
     return (
         f"<b>{escape(item['summary'])}</b>\n"
         f"{severity}"
@@ -130,10 +134,10 @@ def digest_items(chat_id: int, since: str | None = None) -> list[tuple[str, dict
     items = store().records_for_groups(ecos, since=since)
     unique: dict[str, dict] = {}
     for item in items:
-        score = critical_cvss_score(item, ecos)
+        score = high_or_critical_cvss_score(item, ecos)
         if score is None:
             continue
-        item["critical_score"] = score
+        item["cvss_score"] = score
         key = canonical_id(item)
         unique.setdefault(key, item)
     return list(unique.items())
@@ -249,10 +253,10 @@ async def send_digest(bot, chat_id: int, since: str | None = None) -> int:
         seen.add(key)
         if store().record_was_delivered(chat_id, item):
             continue
-        score = critical_cvss_score(item, ecosystems)
+        score = high_or_critical_cvss_score(item, ecosystems)
         if score is None:
             continue
-        item["critical_score"] = score
+        item["cvss_score"] = score
         line = format_digest_item(key, item)
         if len(current) + len(line) > 3800 and current_records:
             await flush()
